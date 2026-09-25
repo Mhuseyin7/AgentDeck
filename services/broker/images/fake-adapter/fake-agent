@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+printf '%s\n' '{"type":"agent_started","payload":{"adapter":"fake"}}'
+mkdir -p /workspace/src
+printf '%s\n' 'export const agentdeckFixture = "changed-by-fake-adapter";' > /workspace/src/fixture.ts
+printf '%s\n' '{"type":"file_modified","payload":{"path":"src/fixture.ts"}}'
+printf '%s\n' '{"type":"test_started","payload":{"command":"deterministic fixture check"}}'
+test -f /workspace/src/fixture.ts
+printf '%s\n' '{"type":"test_finished","payload":{"success":true}}'
+printf '%s\n' '{"type":"task_completed","payload":{"exit_code":0}}'

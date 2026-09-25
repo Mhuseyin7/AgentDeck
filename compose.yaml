@@ -1,0 +1,96 @@
+name: agentdeck
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-agentdeck}
+      POSTGRES_USER: ${POSTGRES_USER:-agentdeck}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [control]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks: [control]
+
+  api:
+    build: ./services/api
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    ports: ["8000:8000"]
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks: [control]
+
+  worker:
+    build: ./services/api
+    command: ["python", "-m", "app.worker"]
+    env_file: .env
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      execution-broker: { condition: service_started }
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks: [control]
+
+  execution-broker:
+    build: ./services/broker
+    environment:
+      BROKER_WORKSPACE_ROOT: /var/lib/agentdeck/workspaces
+      BROKER_ALLOW_FULL_NETWORK: ${ALLOW_FULL_NETWORK:-false}
+      BROKER_SHARED_TOKEN: ${BROKER_SHARED_TOKEN:?set BROKER_SHARED_TOKEN in .env}
+    # The broker is the only service allowed to access the Docker API. Never add this mount elsewhere.
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - workspaces:/var/lib/agentdeck/workspaces
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks: [control]
+
+  fake-adapter-image:
+    build: ./services/broker/images/fake-adapter
+    image: agentdeck/fake-adapter:dev
+    profiles: [build-images]
+
+  web:
+    build: ./apps/web
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on: [api]
+    ports: ["3000:3000"]
+    read_only: true
+    tmpfs: [/tmp, /app/.next/cache]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks: [control]
+
+networks:
+  control: {}
+
+volumes:
+  postgres-data: {}
+  redis-data: {}
+  workspaces: {}

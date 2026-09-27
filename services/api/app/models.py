@@ -111,6 +111,7 @@ class AuditLog(Base):
 
 class SecretMetadata(Base):
     """Metadata is queryable; ciphertext is never returned through an API response."""
+
     __tablename__ = "secret_metadata"
     id: Mapped[uuid.UUID] = uuid_id()
     organization_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("organizations.id"), index=True)

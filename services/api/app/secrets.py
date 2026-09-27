@@ -1,4 +1,5 @@
 """Authenticated secret encryption. Key material must come from a KMS-managed environment variable."""
+
 from cryptography.fernet import Fernet, InvalidToken
 
 

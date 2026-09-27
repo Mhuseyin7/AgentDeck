@@ -113,3 +113,25 @@ def run_logs(task_id: str, _: None = Depends(verify_broker_token)) -> list[dict[
         except (ValueError, TypeError, json.JSONDecodeError):
             events.append({"type": "stdout", "payload": {"text": line}})
     return events
+
+
+@app.get("/v1/runs/{task_id}")
+def run_state(task_id: str, _: None = Depends(verify_broker_token)) -> dict[str, object]:
+    """Expose only lifecycle metadata for an AgentDeck-managed workload."""
+    client = docker_client()
+    try:
+        container = client.containers.get(f"agentdeck-{task_id}")
+        if (
+            container.labels.get("agentdeck.managed") != "true"
+            or container.labels.get("agentdeck.task_id") != task_id
+        ):
+            raise HTTPException(status_code=404, detail="managed sandbox not found")
+        container.reload()
+        state = container.attrs["State"]
+        return {
+            "running": bool(state["Running"]),
+            "exit_code": state.get("ExitCode"),
+            "error": state.get("Error") or None,
+        }
+    except docker.errors.NotFound as exc:
+        raise HTTPException(status_code=404, detail="managed sandbox not found") from exc

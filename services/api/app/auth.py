@@ -20,6 +20,17 @@ def create_access_token(user_id: UUID) -> str:
     return jwt.encode(claims, settings.session_secret, algorithm=ALGORITHM)
 
 
+def authenticated_user_id(token: str) -> UUID:
+    """Decode a bearer token for transports that cannot use HTTP dependencies."""
+    try:
+        claims = jwt.decode(token, settings.session_secret, algorithms=[ALGORITHM])
+        return UUID(str(claims["sub"]))
+    except (jwt.PyJWTError, ValueError, KeyError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid authentication"
+        ) from exc
+
+
 def current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: Session = Depends(get_db),
@@ -28,15 +39,7 @@ def current_user(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="missing authentication"
         )
-    try:
-        claims = jwt.decode(
-            credentials.credentials, settings.session_secret, algorithms=[ALGORITHM]
-        )
-        user_id = UUID(str(claims["sub"]))
-    except (jwt.PyJWTError, ValueError, KeyError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid authentication"
-        ) from exc
+    user_id = authenticated_user_id(credentials.credentials)
     user = db.get(User, user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="unknown user")

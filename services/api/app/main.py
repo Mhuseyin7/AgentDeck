@@ -1,16 +1,17 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket, status
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect, status
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .auth import create_access_token, current_user, organization_role
+from .auth import authenticated_user_id, create_access_token, current_user, organization_role
 from .config import settings
-from .db import Base, engine, get_db
+from .db import Base, SessionLocal, engine, get_db
 from .models import (
     AuditLog,
     Organization,
@@ -241,5 +242,53 @@ def task_events(
 
 @app.websocket(f"{API}/tasks/{{task_id}}/stream")
 async def stream_task_events(websocket: WebSocket, task_id: UUID) -> None:
-    # Authentication is intentionally required via a short-lived token query parameter in production websocket client.
-    await websocket.close(code=1008, reason="websocket authentication pending")
+    token = websocket.query_params.get("access_token", "")
+    try:
+        user_id = authenticated_user_id(token)
+    except HTTPException:
+        await websocket.close(code=1008, reason="authentication required")
+        return
+    with SessionLocal() as db:
+        task = db.get(Task, task_id)
+        project = db.get(Project, task.project_id) if task else None
+        if task is None or project is None:
+            await websocket.close(code=1008, reason="task not found")
+            return
+        try:
+            organization_role(db, project.organization_id, user_id)
+        except HTTPException:
+            await websocket.close(code=1008, reason="access denied")
+            return
+    await websocket.accept()
+    delivered: set[str] = set()
+    try:
+        while True:
+            with SessionLocal() as db:
+                events = db.scalars(
+                    select(TaskEvent)
+                    .where(TaskEvent.task_id == task_id)
+                    .order_by(TaskEvent.created_at)
+                ).all()
+                current_task = db.get(Task, task_id)
+                for event in events:
+                    event_id = str(event.id)
+                    if event_id not in delivered:
+                        await websocket.send_json(
+                            {
+                                "id": event_id,
+                                "type": event.type,
+                                "payload": event.payload,
+                                "created_at": event.created_at.isoformat(),
+                            }
+                        )
+                        delivered.add(event_id)
+                if current_task and current_task.status in {
+                    TaskStatus.SUCCEEDED,
+                    TaskStatus.FAILED,
+                    TaskStatus.CANCELLED,
+                    TaskStatus.TIMED_OUT,
+                }:
+                    return
+            await asyncio.sleep(0.5)
+    except WebSocketDisconnect:
+        return

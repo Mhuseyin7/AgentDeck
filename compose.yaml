@@ -29,6 +29,8 @@ services:
 
   api:
     build: ./services/api
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
     env_file: .env
     depends_on:
       postgres: { condition: service_healthy }
@@ -43,6 +45,8 @@ services:
   worker:
     build: ./services/api
     command: ["python", "-m", "app.worker"]
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-production}
     env_file: .env
     depends_on:
       postgres: { condition: service_healthy }

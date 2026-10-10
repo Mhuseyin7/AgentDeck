@@ -37,7 +37,8 @@ class ProjectResponse(ProjectCreate):
 
 
 class TaskCreate(BaseModel):
-    agent_type: str = Field(pattern="^(fake|codex|claude_code|opencode)$")
+    # Provider adapters are enabled only after their supported local authentication path is configured.
+    agent_type: str = Field(pattern="^fake$")
     prompt: str = Field(min_length=1, max_length=100_000)
     branch: str = Field(pattern=r"^[A-Za-z0-9._/-]{1,255}$")
 

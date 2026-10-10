@@ -39,6 +39,7 @@ from .states import validate_transition
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    settings.validate_runtime()
     Base.metadata.create_all(engine)  # Replace with Alembic migrations in production rollout.
     yield
 
@@ -199,7 +200,8 @@ def get_task(
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     project = db.get(Project, task.project_id)
-    assert project is not None
+    if project is None:
+        raise HTTPException(status_code=500, detail="task project is missing")
     organization_role(db, project.organization_id, user.id)
     return task
 

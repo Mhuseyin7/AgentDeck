@@ -1,6 +1,8 @@
 import hmac
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 import docker
@@ -13,6 +15,29 @@ app = FastAPI(title="AgentDeck execution broker", docs_url=None, redoc_url=None)
 WORKSPACE_ROOT = Path(os.getenv("BROKER_WORKSPACE_ROOT", "/var/lib/agentdeck/workspaces"))
 SHARED_TOKEN = os.getenv("BROKER_SHARED_TOKEN", "")
 ALLOW_FULL_NETWORK = os.getenv("BROKER_ALLOW_FULL_NETWORK", "false").lower() == "true"
+
+
+def enforce_timeout(container_id: str, timeout_seconds: int) -> None:
+    """Broker-side watchdog: a worker outage must not create an unbounded workload."""
+    client = docker_client()
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            container = client.containers.get(container_id)
+            container.reload()
+            if not container.attrs["State"]["Running"]:
+                return
+        except docker.errors.NotFound:
+            return
+        time.sleep(min(1.0, max(0.1, deadline - time.monotonic())))
+    try:
+        container = client.containers.get(container_id)
+        container.reload()
+        if container.attrs["State"]["Running"]:
+            container.kill()
+            container.wait(timeout=10)
+    except (docker.errors.NotFound, docker.errors.APIError):
+        return
 
 
 def verify_broker_token(x_agentdeck_broker_token: str = Header(default="")) -> None:
@@ -66,6 +91,12 @@ def start_run(request: RunRequest, _: None = Depends(verify_broker_token)) -> Ru
     except APIError as exc:
         workspace.rmdir()
         raise HTTPException(status_code=502, detail="sandbox provisioning failed") from exc
+    threading.Thread(
+        target=enforce_timeout,
+        args=(container.id, request.limits.timeout_seconds),
+        daemon=True,
+        name=f"agentdeck-watchdog-{request.task_id}",
+    ).start()
     return RunResponse(container_id=container.id, task_id=request.task_id)
 
 
